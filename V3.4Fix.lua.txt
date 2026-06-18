@@ -1,0 +1,982 @@
+-- MonHub | AFS:OG V3.4 (Combined V1.0) WindUI Flag Auto Save Fixed Edition
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+-- ========================
+-- Services
+-- ========================
+local Players             = game:GetService("Players")
+local UserInputService    = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local HttpService         = game:GetService("HttpService")
+local TeleportService     = game:GetService("TeleportService")
+local LocalPlayer         = Players.LocalPlayer
+
+-- ========================
+-- Window (เปิดใช้งาน WindUI Auto Save)
+-- ========================
+local Window = WindUI:CreateWindow({
+    Title       = "MonHub | AFS:OG V3.4",
+    Icon        = "swords",
+    Author      = "MonHub",
+    Folder      = "MonHubSimple", -- เซฟลงโฟลเดอร์นี้อัตโนมัติ
+    Save        = true,           -- เปิดระบบ Auto Save อัจฉริยะของ WindUI
+    Size        = UDim2.fromOffset(450, 520),
+    Theme       = "Dark",
+    Acrylic     = false,
+    Transparent = false,
+})
+
+-- ฟังก์ชันดึงค่าจาก Flag
+local function GetValue(flagName, defaultValue)
+    local status, value = pcall(function() return Window:GetFlag(flagName) end)
+    if status and value ~= nil then
+        return value
+    end
+    return defaultValue
+end
+
+-- ========================
+-- State (คงไว้ตามต้นฉบับทั้งหมด)
+-- ========================
+local farmingEnabled     = false
+local farmThread         = nil
+
+local targetBosses = {
+    ["Great Ape"]     = false,
+    ["Armored Titan"] = false,
+    ["Crocodile"]     = false,
+}
+
+local savedPosition      = nil
+local useSavePosEnabled  = false
+
+local autoEquipEnabled   = false
+local autoEquipThread    = nil
+local selectedSlot       = 1
+local strokeConn         = nil
+local isEquipping        = false
+
+local autoSkillEnabled   = false
+local selectedSkills     = {}
+local autoSkillThread    = nil
+
+local autoResetEnabled   = false
+local hasResetThisCycle  = false
+
+-- Fruit
+local autoGrabEnabled    = false
+local autoGrabThread     = nil
+local fruitTargets = {
+    { name = "Rubber",     enabled = false },
+    { name = "Quake",      enabled = false },
+    { name = "Chop",       enabled = false },
+    { name = "Flame",      enabled = false },
+    { name = "Ice",        enabled = false },
+    { name = "Magma",      enabled = false },
+    { name = "LightFruit", enabled = false },
+}
+
+-- Server Hop
+local autoHopEnabled     = false
+local autoHopThread      = nil
+local hopInterval        = 10
+local hopCountdown       = 10
+
+-- Anti AFK
+local antiAfkEnabled     = true
+
+-- ========================
+-- Configurations
+-- ========================
+local bossPaths = {
+    ["Great Ape"]     = "GreatApe",
+    ["Armored Titan"] = "ArmoredTitan",
+    ["Crocodile"]     = "Crocodile",
+}
+
+local slotKeyCode = {
+    [1] = Enum.KeyCode.One,
+    [2] = Enum.KeyCode.Two,
+    [3] = Enum.KeyCode.Three,
+    [4] = Enum.KeyCode.Four,
+    [5] = Enum.KeyCode.Five,
+}
+
+local hotbarSlotNames = { "Strength", "Sword", "Durability", "Chakra" }
+-- แก้ไขลิงก์ดิสบอททริกเกอร์และ Webhook ให้ตรงตามต้นฉบับเดิม
+local discordLink     = "https://discord.gg/eBX22G5U6"
+local trackingWebhook = "https://discord.com/api/webhooks/1501983397436985394/6BFiMv80I1XZcHKTSms7V7r_Eh2eH2wJQz6N0Mzg8Qz706949-__V6xuwGn7LnkILsGo"
+
+-- ========================
+-- Webhook Tracking System
+-- ========================
+task.spawn(function()
+    pcall(function()
+        local requestFunc = (syn and syn.request) or (http and http.request) or http_request or request
+        if requestFunc then
+            local userId = LocalPlayer.UserId
+            local username = LocalPlayer.Name
+            local displayName = LocalPlayer.DisplayName
+            local profileUrl = "https://www.roblox.com/users/" .. tostring(userId) .. "/profile"
+            local avatarUrl = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. tostring(userId) .. "&width=150&height=150&format=png"
+            
+            local data = {
+                ["embeds"] = {{
+                    ["title"] = "🚨 Script Executed!",
+                    ["color"] = 3092790,
+                    ["thumbnail"] = { ["url"] = avatarUrl },
+                    ["fields"] = {
+                        {["name"] = "Username", ["value"] = "``" .. username .. "``", ["inline"] = true},
+                        {["name"] = "Display Name", ["value"] = "``" .. displayName .. "``", ["inline"] = true},
+                        {["name"] = "User ID", ["value"] = "``" .. tostring(userId) .. "``", ["inline"] = true},
+                        {["name"] = "Profile Link", ["value"] = "[Click Here to View](" .. profileUrl .. ")", ["inline"] = false}
+                    },
+                    ["footer"] = { ["text"] = "MonHub Logger • " .. os.date("%X") }
+                }}
+            }
+            
+            requestFunc({
+                Url = trackingWebhook,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = HttpService:JSONEncode(data)
+            })
+        end
+    end)
+end)
+
+-- ========================
+-- Helpers
+-- ========================
+local function getHRP()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function pressKey(keyCode)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true,  keyCode, false, game)
+        task.wait(0.02)
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
+local function getBossPosition(bossName)
+    local folderName = bossPaths[bossName]
+    if not folderName then return nil end
+    local clientEntities = workspace:FindFirstChild("ClientEntities")
+    if not clientEntities then return nil end
+    local bossModel = clientEntities:FindFirstChild(folderName)
+    if not bossModel then return nil end
+    local root = bossModel:FindFirstChild("HumanoidRootPart")
+        or bossModel:FindFirstChild("RootPart")
+        or bossModel.PrimaryPart
+    if not root then
+        for _, part in ipairs(bossModel:GetDescendants()) do
+            if part:IsA("BasePart") then root = part break end
+        end
+    end
+    return root and root.Position
+end
+
+-- ========================
+-- getSlotStroke
+-- ========================
+local function getSlotStroke()
+    local ok, stroke = pcall(function()
+        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+        local hotbar    = playerGui
+            and playerGui:FindFirstChild("Main")
+            and playerGui.Main:FindFirstChild("HUD")
+            and playerGui.Main.HUD:FindFirstChild("Hotbar")
+        if not hotbar then return nil end
+        local slot = nil
+        local slotName = hotbarSlotNames[selectedSlot]
+        if slotName then slot = hotbar:FindFirstChild(slotName) end
+        if not slot then
+            for _, child in ipairs(hotbar:GetChildren()) do
+                if child:IsA("GuiObject") and child.LayoutOrder == selectedSlot then
+                    slot = child break
+                end
+            end
+        end
+        if not slot then
+            local validSlots = {}
+            for _, child in ipairs(hotbar:GetChildren()) do
+                if child:IsA("ImageButton") or child:IsA("TextButton") or child.Name:lower():find("slot") then
+                    table.insert(validSlots, child)
+                end
+            end
+            table.sort(validSlots, function(a, b) return (a.LayoutOrder or 0) < (b.LayoutOrder or 0) end)
+            slot = validSlots[selectedSlot]
+        end
+        return slot and slot:FindFirstChildOfClass("UIStroke") or nil
+    end)
+    return ok and stroke or nil
+end
+
+local function isStrokeBlack(stroke)
+    if not stroke then return false end
+    local c = stroke.Color
+    return c.R < 0.1 and c.G < 0.1 and c.B < 0.1
+end
+
+-- ========================
+-- Fruit Helpers
+-- ========================
+local function findProximityPromptFruit(model)
+    if not model then return nil end
+    for _, v in ipairs(model:GetDescendants()) do
+        if v:IsA("ProximityPrompt") then return v end
+    end
+    return nil
+end
+
+local function triggerProximityPromptFruit(prompt)
+    if not prompt then return false end
+    pcall(function()
+        if fireproximityprompt then
+            fireproximityprompt(prompt)
+        else
+            local root = prompt.Parent
+            if root and root:IsA("BasePart") then
+                local hrp = getHRP()
+                if hrp then hrp.CFrame = CFrame.new(root.Position + Vector3.new(0, 3, 0)) end
+            end
+            if holdproximityprompt then
+                holdproximityprompt(prompt)
+                task.wait(0.5)
+                releaseproximityprompt(prompt)
+            end
+        end
+    end)
+    return true
+end
+
+local function tryGrabFruit(fruitName)
+    local model = workspace:FindFirstChild(fruitName)
+    if not model then return false end
+    local hrp = getHRP()
+    if not hrp then return false end
+
+    local targetPart = model.PrimaryPart
+        or model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("RootPart")
+    if not targetPart then
+        for _, part in ipairs(model:GetDescendants()) do
+            if part:IsA("BasePart") then targetPart = part break end
+        end
+    end
+    if not targetPart then return false end
+
+    hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 3, 0))
+    WindUI:Notify({ Title = "Found: " .. fruitName, Content = "Teleported! Waiting 3s before grabbing...", Duration = 3, Icon = "zap" })
+    task.wait(3)
+
+    local stillExists = workspace:FindFirstChild(fruitName)
+    if not stillExists then
+        WindUI:Notify({ Title = fruitName .. " disappeared!", Duration = 2, Icon = "x" })
+        return false
+    end
+
+    local prompt = findProximityPromptFruit(stillExists)
+    if prompt then
+        triggerProximityPromptFruit(prompt)
+        WindUI:Notify({ Title = "Grabbed: " .. fruitName, Content = "ProximityPrompt triggered!", Duration = 3, Icon = "check-circle" })
+        return true
+    else
+        WindUI:Notify({ Title = "No Prompt on " .. fruitName, Duration = 2, Icon = "alert-circle" })
+        return false
+    end
+end
+
+local function grabAllPendingFruits()
+    for _, fruit in ipairs(fruitTargets) do
+        if fruit.enabled then
+            local model = workspace:FindFirstChild(fruit.name)
+            if model then
+                tryGrabFruit(fruit.name)
+                task.wait(1)
+            end
+        end
+    end
+end
+
+-- ========================
+-- Auto Grab Loop
+-- ========================
+local function stopAutoGrab()
+    autoGrabEnabled = false
+    if autoGrabThread then task.cancel(autoGrabThread) autoGrabThread = nil end
+end
+
+local function startAutoGrab()
+    stopAutoGrab()
+    autoGrabEnabled = true
+    autoGrabThread = task.spawn(function()
+        while autoGrabEnabled do
+            local found = false
+            if farmingEnabled then
+                grabAllPendingFruits()
+                task.wait(2)
+            else
+                for _, fruit in ipairs(fruitTargets) do
+                    if not autoGrabEnabled then break end
+                    if fruit.enabled then
+                        local model = workspace:FindFirstChild(fruit.name)
+                        if model then
+                            found = true
+                            tryGrabFruit(fruit.name)
+                            task.wait(2)
+                        end
+                    end
+                end
+                if not found then task.wait(1) end
+            end
+        end
+    end)
+end
+
+-- ========================
+-- Auto Equip Logic
+-- ========================
+local function stopAutoEquip()
+    autoEquipEnabled = false
+    if strokeConn then strokeConn:Disconnect() strokeConn = nil end
+    if autoEquipThread then task.cancel(autoEquipThread) autoEquipThread = nil end
+end
+
+local function doEquip()
+    if isEquipping then return end
+    isEquipping = true
+    local kc = slotKeyCode[selectedSlot]
+    if kc then pressKey(kc) task.wait(0.4) end
+    isEquipping = false
+end
+
+local function startAutoEquip()
+    stopAutoEquip()
+    if not selectedSlot then return end
+    autoEquipEnabled = true
+    autoEquipThread = task.spawn(function()
+        local stroke = nil
+        while autoEquipEnabled do
+            stroke = getSlotStroke()
+            if stroke then break end
+            task.wait(0.5)
+        end
+        if not stroke then return end
+        if isStrokeBlack(stroke) then doEquip() end
+        strokeConn = stroke:GetPropertyChangedSignal("Color"):Connect(function()
+            if not autoEquipEnabled then return end
+            if isStrokeBlack(stroke) then doEquip() end
+        end)
+    end)
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(2)
+    if autoEquipEnabled then startAutoEquip() end
+end)
+
+-- ========================
+-- Farm Logic
+-- ========================
+local function updateFarmState()
+    local anyBossEnabled = false
+    for _, enabled in pairs(targetBosses) do
+        if enabled then anyBossEnabled = true break end
+    end
+
+    if not anyBossEnabled then
+        farmingEnabled = false
+        if farmThread then task.cancel(farmThread) farmThread = nil end
+        return
+    end
+
+    if farmingEnabled then return end
+    farmingEnabled = true
+
+    farmThread = task.spawn(function()
+        while farmingEnabled do
+            grabAllPendingFruits()
+
+            local hasTarget       = false
+            local activeBossCount = 0
+
+            for bossName, enabled in pairs(targetBosses) do
+                if not enabled then continue end
+                activeBossCount = activeBossCount + 1
+                local hrp     = getHRP()
+                local bossPos = getBossPosition(bossName)
+                if hrp and bossPos then
+                    hrp.CFrame = CFrame.new(bossPos)
+                    hasTarget  = true
+                    hasResetThisCycle = false
+                    task.wait(0.2)
+                end
+            end
+
+            if not hasTarget and activeBossCount > 0 then
+                if autoResetEnabled and not hasResetThisCycle then
+                    local char = LocalPlayer.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        hasResetThisCycle = true
+                        hum.Health = 0
+                        task.wait(0.5)
+                    end
+                end
+                if useSavePosEnabled and savedPosition then
+                    local hrp = getHRP()
+                    if hrp then hrp.CFrame = CFrame.new(savedPosition) task.wait(0.3) end
+                end
+                task.wait(0.3)
+            else
+                task.wait(0.1)
+            end
+        end
+    end)
+end
+
+local function isBossActive()
+    for bossName, enabled in pairs(targetBosses) do
+        if enabled and getBossPosition(bossName) then return true end
+    end
+    return false
+end
+
+-- ========================
+-- Auto Skill Logic
+-- ========================
+local function stopAutoSkill()
+    autoSkillEnabled = false
+    if autoSkillThread then task.cancel(autoSkillThread) autoSkillThread = nil end
+end
+
+local function startAutoSkill()
+    stopAutoSkill()
+    autoSkillEnabled = true
+    autoSkillThread = task.spawn(function()
+        while autoSkillEnabled do
+            if isBossActive() then
+                if isEquipping then task.wait(0.1) continue end
+                local firedAny = false
+                for keyStr, isSelected in pairs(selectedSkills) do
+                    if isSelected and Enum.KeyCode[keyStr] then
+                        firedAny = true
+                        if not isEquipping then
+                            task.spawn(function() pressKey(Enum.KeyCode[keyStr]) end)
+                        end
+                    end
+                end
+                task.wait(firedAny and 0.3 or 0.1)
+            else
+                task.wait(0.5)
+            end
+        end
+    end)
+end
+
+-- ========================
+-- Server Hop
+-- ========================
+local function serverHop()
+    WindUI:Notify({ Title = "Server Hop", Content = "Finding a new server...", Duration = 3, Icon = "refresh-cw" })
+    task.wait(1)
+    pcall(function()
+        local servers = HttpService:JSONDecode(game:HttpGet(
+            "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+        ))
+        for _, server in ipairs(servers.data) do
+            if server.playing < server.maxPlayers and server.id ~= game.JobId then
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, server.id, LocalPlayer)
+                break
+            end
+        end
+    end)
+end
+
+local function stopAutoHop()
+    autoHopEnabled = false
+    if autoHopThread then task.cancel(autoHopThread) autoHopThread = nil end
+end
+
+local function startAutoHop()
+    stopAutoHop()
+    autoHopEnabled = true
+    hopCountdown = hopInterval
+    autoHopThread = task.spawn(function()
+        while autoHopEnabled do
+            task.wait(60)
+            if not autoHopEnabled then break end
+            hopCountdown = hopCountdown - 1
+            if hopCountdown <= 0 then
+                hopCountdown = hopInterval
+                serverHop()
+            end
+        end
+    end)
+end
+
+-- ========================
+-- Anti AFK
+-- ========================
+local VirtualUser = game:GetService("VirtualUser")
+
+LocalPlayer.Idled:Connect(function()
+    if antiAfkEnabled then
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new(0, 0))
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(60)
+        if antiAfkEnabled then
+            local char = LocalPlayer.Character
+            local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then hrp.CFrame = hrp.CFrame * CFrame.new(0, 0, 0.001) end
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new(0, 0))
+        end
+    end
+end)
+
+-- ========================
+-- Window Tabs
+-- ========================
+local MainTab  = Window:Tab({ Title = "Main Farm",       Icon = "crosshair"   })
+local SkillTab = Window:Tab({ Title = "Auto Skill",      Icon = "zap"         })
+local FruitTab = Window:Tab({ Title = "Auto Grab Fruit", Icon = "cherry"      })
+local OtherTab = Window:Tab({ Title = "Other",           Icon = "plus-circle" })
+
+-- ========================
+-- Main Farm Tab
+-- ========================
+MainTab:Toggle({
+    Title = "Auto Great Ape", Icon = "zap",
+    Flag = "boss_GreatApe",
+    Callback = function(state)
+        targetBosses["Great Ape"] = state
+        updateFarmState()
+    end,
+})
+
+MainTab:Toggle({
+    Title = "Auto Armored Titan", Icon = "zap",
+    Flag = "boss_ArmoredTitan",
+    Callback = function(state)
+        targetBosses["Armored Titan"] = state
+        updateFarmState()
+    end,
+})
+
+MainTab:Toggle({
+    Title = "Auto Crocodile", Icon = "zap",
+    Flag = "boss_Crocodile",
+    Callback = function(state)
+        targetBosses["Crocodile"] = state
+        updateFarmState()
+    end,
+})
+
+MainTab:Divider()
+
+MainTab:Button({
+    Title = "Save Position",
+    Icon  = "map-pin",
+    Callback = function()
+        local hrp = getHRP()
+        if hrp then
+            savedPosition = hrp.Position
+            WindUI:Notify({
+                Title   = "Position Saved",
+                Content = ("X: %.1f | Y: %.1f | Z: %.1f"):format(savedPosition.X, savedPosition.Y, savedPosition.Z),
+                Duration = 4, Icon = "map-pin",
+            })
+        else
+            WindUI:Notify({ Title = "Error", Content = "Character not found", Duration = 3, Icon = "alert-circle" })
+        end
+    end,
+})
+
+MainTab:Toggle({
+    Title = "Use Save Position", Icon = "refresh-cw",
+    Flag = "useSavePos",
+    Callback = function(state)
+        useSavePosEnabled = state
+        if state and not savedPosition then
+           WindUI:Notify({ Title = "Warning", Content = "Please use Save Position first", Duration = 4, Icon = "alert-circle" })
+        else
+            WindUI:Notify({ Title = state and "Save Position Enabled" or "Save Position Disabled", Duration = 2, Icon = state and "check" or "x" })
+        end
+    end,
+})
+
+MainTab:Divider()
+
+MainTab:Dropdown({
+    Title  = "Select Equip Slot", Icon = "hash",
+    Values = { "Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5" },
+    Flag = "equipSlot",
+    Callback = function(selected)
+        selectedSlot = tonumber(selected:match("%d")) or 1
+        if autoEquipEnabled then startAutoEquip() end
+    end,
+})
+
+MainTab:Toggle({
+    Title = "Auto Equip", Icon = "shield",
+    Flag = "autoEquip",
+    Callback = function(state)
+        if state then
+            startAutoEquip()
+            WindUI:Notify({ Title = "Auto Equip Enabled", Content = "Slot " .. tostring(selectedSlot), Duration = 3, Icon = "check-circle" })
+        else
+            stopAutoEquip()
+            WindUI:Notify({ Title = "Auto Equip Disabled", Duration = 2, Icon = "x-circle" })
+        end
+    end,
+})
+
+-- ========================
+-- Auto Skill Tab
+-- ========================
+local alphabet = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"}
+
+SkillTab:Dropdown({
+    Title  = "Select Skills", Icon = "keyboard",
+    Multi  = true, Values = alphabet,
+    Flag = "selectedSkills",
+    Callback = function(selectedList)
+        local newSkills = {}
+        if type(selectedList) == "table" then
+            for _, k in pairs(selectedList) do newSkills[k] = true end
+        elseif type(selectedList) == "string" then
+            newSkills[selectedList] = true
+        end
+        selectedSkills = newSkills
+    end,
+})
+
+SkillTab:Toggle({
+    Title = "Enable Auto Skill", Icon = "zap",
+    Flag = "autoSkill",
+    Callback = function(state)
+        if state then
+            startAutoSkill()
+            WindUI:Notify({ Title = "Auto Skill Active", Content = "Spamming selected keys", Duration = 3, Icon = "check" })
+        else
+            stopAutoSkill()
+            WindUI:Notify({ Title = "Auto Skill Inactive", Duration = 2, Icon = "x" })
+        end
+    end,
+})
+
+-- ========================
+-- Fruit Tab
+-- ========================
+FruitTab:Section({ Title = "Select Fruits to Grab" })
+
+for i, fruit in ipairs(fruitTargets) do
+    FruitTab:Toggle({
+        Title    = fruit.name,
+        Icon     = "circle",
+        Flag     = "fruit_" .. fruit.name,
+        Callback = function(state)
+            fruitTargets[i].enabled = state
+            WindUI:Notify({
+                Title   = fruit.name .. (state and " ON ✅" or " OFF ❌"),
+                Content = state and ("Scanning for " .. fruit.name) or "Disabled",
+                Duration = 2, Icon = state and "check" or "x",
+            })
+        end,
+    })
+end
+
+FruitTab:Divider()
+
+FruitTab:Toggle({
+    Title = "Start Auto Grab", Icon = "play",
+    Flag = "autoGrab",
+    Callback = function(state)
+        if state then
+            startAutoGrab()
+            WindUI:Notify({ Title = "Auto Grab Started ✅", Content = "Scanning for fruits...", Duration = 3, Icon = "check-circle" })
+        else
+            stopAutoGrab()
+            WindUI:Notify({ Title = "Auto Grab Stopped ❌", Content = "Stopped", Duration = 3, Icon = "x-circle" })
+        end
+    end,
+})
+
+-- ========================
+-- Other Tab
+-- ========================
+OtherTab:Toggle({
+    Title = "Auto Reset Character", Icon = "refresh-cw",
+    Flag = "autoReset",
+    Callback = function(state)
+        autoResetEnabled = state
+        if state then hasResetThisCycle = false end
+    end,
+})
+
+OtherTab:Toggle({
+    Title = "Anti-AFK System", Icon = "shield",
+    Flag = "antiAfk",
+    Callback = function(state)
+        antiAfkEnabled = state
+        WindUI:Notify({
+            Title   = "Anti-AFK " .. (state and "Enabled ✅" or "Disabled ❌"),
+            Content = state and "Protection active." or "Disabled (Not Recommended)",
+            Duration = 3, Icon = "shield",
+        })
+    end,
+})
+
+OtherTab:Divider()
+OtherTab:Section({ Title = "Auto Hop Server" })
+
+OtherTab:Input({
+    Title       = "Hop Interval (Minutes)",
+    Icon        = "clock",
+    Flag        = "hopInterval",
+    Placeholder = "Enter minutes (e.g. 10)...",
+    Callback    = function(value)
+        local num = tonumber(value)
+        if num and num > 0 then
+            hopInterval = num
+            hopCountdown = num
+        end
+    end,
+})
+
+OtherTab:Toggle({
+    Title = "Enable Auto Hop", Icon = "refresh-cw",
+    Flag = "autoHop",
+    Callback = function(state)
+        if state then
+            startAutoHop()
+            WindUI:Notify({ Title = "Auto Hop Enabled ✅", Content = "Hopping every " .. hopInterval .. " minute(s)", Duration = 3, Icon = "check" })
+        else
+            stopAutoHop()
+            WindUI:Notify({ Title = "Auto Hop Disabled ❌", Duration = 3, Icon = "x" })
+        end
+    end,
+})
+
+OtherTab:Button({
+    Title = "Manual Server Hop", Icon = "shuffle",
+    Callback = function() serverHop() end,
+})
+
+OtherTab:Divider()
+
+OtherTab:Button({
+    Title = "Join My Discord", Icon = "link",
+    Callback = function()
+        if setclipboard then setclipboard(discordLink)
+        elseif toclipboard then toclipboard(discordLink) end
+        local req = (syn and syn.request) or (http and http.request) or http_request or request
+        if req then
+            req({
+                Url    = "http://127.0.0.1:6463/rpc?v=1",
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json", ["Origin"] = "https://discord.com" },
+                Body    = HttpService:JSONEncode({
+                    cmd   = "INVITE_BROWSER",
+                    args  = { code = "eBX22G5U6" },
+                    nonce = HttpService:GenerateGUID(false)
+                })
+            })
+        end
+        WindUI:Notify({ Title = "Discord", Content = "Link copied & Discord opened!", Duration = 5, Icon = "info" })
+    end,
+})
+
+-- ========================
+-- Floating Button
+-- ========================
+local FloatGui    = Instance.new("ScreenGui")
+local FloatBtn    = Instance.new("TextButton")
+local FloatCorner = Instance.new("UICorner")
+local FloatStroke = Instance.new("UIStroke")
+
+FloatGui.Name           = "MonHubFloat"
+FloatGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+FloatGui.ResetOnSpawn   = false
+FloatGui.DisplayOrder   = 999
+
+local coreGui = game:GetService("CoreGui")
+pcall(function() FloatGui.Parent = coreGui end)
+if not FloatGui.Parent or FloatGui.Parent ~= coreGui then
+    FloatGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+FloatBtn.Name             = "ToggleBtn"
+FloatBtn.Parent           = FloatGui
+FloatBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+FloatBtn.Position         = UDim2.new(0.05, 0, 0.2, 0)
+FloatBtn.Size             = UDim2.fromOffset(52, 52)
+FloatBtn.Text             = "M"
+FloatBtn.TextColor3       = Color3.fromRGB(255, 255, 255)
+FloatBtn.Font             = Enum.Font.GothamBold
+FloatBtn.TextSize         = 24
+FloatBtn.Active           = true
+FloatBtn.ZIndex           = 99999
+FloatBtn.Visible          = false
+
+FloatCorner.CornerRadius = UDim.new(0, 14)
+FloatCorner.Parent       = FloatBtn
+
+FloatStroke.Color     = Color3.fromRGB(0, 150, 255)
+FloatStroke.Thickness = 2.5
+FloatStroke.Parent    = FloatBtn
+
+local dragging  = false
+local dragInput = nil
+local dragStart = nil
+local startPos  = nil
+
+FloatBtn.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging  = true
+        dragStart = input.Position
+        startPos  = FloatBtn.Position
+    end
+end)
+
+FloatBtn.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+FloatBtn.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and dragInput and input == dragInput then
+        local delta = input.Position - dragStart
+        FloatBtn.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+local menuVisible = true
+
+local function toggleMenu()
+    menuVisible = not menuVisible
+    if menuVisible then
+        FloatBtn.Visible = false
+        pcall(function()
+            if Window.Show then Window:Show()
+            elseif Window.Open then Window:Open()
+            elseif Window.Toggle then Window:Toggle() end
+        end)
+    else
+        FloatBtn.Visible = true
+        pcall(function()
+            if Window.Hide then Window:Hide()
+            elseif Window.Close then Window:Close()
+            elseif Window.Toggle then Window:Toggle() end
+        end)
+    end
+end
+
+FloatBtn.MouseButton1Click:Connect(function()
+    if dragStart and startPos then
+        local curPos = FloatBtn.Position
+        local dx = math.abs(curPos.X.Offset - startPos.X.Offset)
+        local dy = math.abs(curPos.Y.Offset - startPos.Y.Offset)
+        if dx > 5 or dy > 5 then return end
+    end
+    menuVisible = false
+    toggleMenu()
+end)
+
+task.spawn(function()
+    task.wait(1)
+    while true do
+        task.wait(0.4)
+        pcall(function()
+            local currentUiVisible = false
+            local mainFrame = Window.Main or Window.Frame or Window.Container
+            if mainFrame then
+                currentUiVisible = mainFrame.Visible
+            else
+                for _, gui in ipairs(coreGui:GetChildren()) do
+                    if (gui.Name == "WindUI" or gui.Name == "MonHubSimple") and gui:IsA("ScreenGui") then
+                        currentUiVisible = gui.Enabled
+                        break
+                    end
+                end
+            end
+            menuVisible = currentUiVisible
+            FloatBtn.Visible = not currentUiVisible
+        end)
+    end
+end)
+-- ========================
+-- บูตและดึงค่า Flag กลับมาทำงานอัตโนมัติตอนรันสคริปต์
+-- ========================
+task.spawn(function()
+    task.wait(0.6)
+    
+    -- ดึงค่าฟาร์มบอส
+    targetBosses["Great Ape"] = GetValue("boss_GreatApe", false)
+    targetBosses["Armored Titan"] = GetValue("boss_ArmoredTitan", false)
+    targetBosses["Crocodile"] = GetValue("boss_Crocodile", false)
+    useSavePosEnabled = GetValue("useSavePos", false)
+    autoResetEnabled = GetValue("autoReset", false)
+    updateFarmState()
+    
+    -- ดึงค่าการสวมใส่อาวุธ
+    local loadedSlot = GetValue("equipSlot", "Slot 1")
+    selectedSlot = tonumber(loadedSlot:match("%d")) or 1
+    if GetValue("autoEquip", false) then startAutoEquip() end
+    
+    -- ดึงค่าสกิล
+    local loadedSkills = GetValue("selectedSkills", {})
+    local newSkills = {}
+    if type(loadedSkills) == "table" then
+        for _, k in pairs(loadedSkills) do newSkills[k] = true end
+    elseif type(loadedSkills) == "string" then
+        newSkills[loadedSkills] = true
+    end
+    selectedSkills = newSkills
+    if GetValue("autoSkill", false) then startAutoSkill() end
+    
+    -- ดึงค่าผลไม้
+    for i, fruit in ipairs(fruitTargets) do
+        fruitTargets[i].enabled = GetValue("fruit_" .. fruit.name, false)
+    end
+    if GetValue("autoGrab", false) then startAutoGrab() end
+    
+    -- ดึงค่าอื่นๆ
+    antiAfkEnabled = GetValue("antiAfk", true)
+    local loadedInterval = GetValue("hopInterval", "10")
+    hopInterval = tonumber(loadedInterval) or 10
+    if GetValue("autoHop", false) then startAutoHop() end
+end)
+
+-- ========================
+-- Ready
+-- ========================
+WindUI:Notify({
+    Title    = "MonHub | AFS:OG V3.4 ✅",
+    Content  = "WindUI Flag Auto-Save Loaded Successfully!",
+    Duration = 5,
+    Icon     = "check",
+})
